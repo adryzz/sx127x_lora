@@ -179,12 +179,12 @@ pub enum Error<SPI, CS, RESET> {
     CS(CS),
     Reset(RESET),
     SPI(SPI),
-    RadioError(RadioError)
+    RadioError(RadioError),
 }
 
 #[derive(Error, Debug)]
 pub enum RadioError {
-    #[error("The packet is too big. The max size is {}.", 255)]
+    #[error("The packet is too big. The max size is {}.", MAX_PKT_LENGTH)]
     PacketTooBig,
     #[error("Value out of range. The allowed range is [{0}-{1}].")]
     ValueOutOfRange(u8, u8),
@@ -279,16 +279,24 @@ where
         Ok(())
     }
 
-    /// Transmits up to 255 bytes of data. To avoid the use of an allocator, this takes a fixed 255 u8
-    /// array and a payload size and returns the number of bytes sent if successful.
-    pub fn transmit_payload_busy(
+    /// Transmits up to 255 bytes of data. This takes an u8 slice and returns the number of bytes sent if successful.
+    /// If blocking, this will wait until the transmission has ended.
+    pub fn transmit_payload(
         &mut self,
-        buffer: [u8; 255],
-        payload_size: usize,
+        buffer: &[u8],
+        blocking: bool,
     ) -> Result<usize, Error<E, CS::Error, RESET::Error>> {
         if self.transmitting()? {
             Err(Error::RadioError(RadioError::Transmitting))
         } else {
+            let current_length = self.read_register(Register::RegPayloadLength.addr())? as usize;
+
+            let mut size = buffer.len();
+
+            if (current_length + size) > MAX_PKT_LENGTH as usize {
+                size = MAX_PKT_LENGTH as usize - current_length;
+            }
+
             self.set_mode(RadioMode::Stdby)?;
             if self.explicit_header {
                 self.set_explicit_header_mode()?;
@@ -298,14 +306,21 @@ where
 
             self.write_register(Register::RegIrqFlags.addr(), 0)?;
             self.write_register(Register::RegFifoAddrPtr.addr(), 0)?;
-            self.write_register(Register::RegPayloadLength.addr(), 0)?;
-            for byte in buffer.iter().take(payload_size) {
+            //self.write_register(Register::RegPayloadLength.addr(), 0)?;
+
+            for byte in buffer[0..size].iter() {
                 self.write_register(Register::RegFifo.addr(), *byte)?;
             }
-            self.write_register(Register::RegPayloadLength.addr(), payload_size as u8)?;
+
+            let new_length = current_length + size;
+
+            self.write_register(Register::RegPayloadLength.addr(), new_length as u8)?;
             self.set_mode(RadioMode::Tx)?;
-            while self.transmitting()? {}
-            Ok(payload_size)
+
+            if blocking {
+                while self.transmitting()? {}
+            }
+            Ok(size)
         }
     }
 
@@ -313,7 +328,7 @@ where
         self.write_register(Register::RegDioMapping1.addr(), 0b01_00_00_00)
     }
 
-    pub fn transmit_payload(
+    /*pub fn transmit_payload(
         &mut self,
         payload: &[u8],
     ) -> Result<(), Error<E, CS::Error, RESET::Error>> {
@@ -340,7 +355,7 @@ where
             self.set_mode(RadioMode::Tx)?;
             Ok(())
         }
-    }
+    }*/
 
     /// Blocks the current thread, returning the size of a packet if one is received or an error is the
     /// task timed out. The timeout can be supplied with None to make it poll indefinitely or
@@ -779,3 +794,5 @@ impl RadioMode {
         self as u8
     }
 }
+
+const MAX_PKT_LENGTH: u8 = 255;
