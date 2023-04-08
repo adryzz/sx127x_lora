@@ -448,17 +448,15 @@ where
     ) -> Result<(), Error<E, CS::Error, RESET::Error>> {
         if PaConfig::PaOutputRfoPin.addr() == output_pin {
             // RFO
-            if level < 0 {
-                level = 0;
-            } else if level > 14 {
-                level = 14;
+            if level < 0 || level > 14 {
+                return Err(RadioError(RadioError::ValueOutOfRange(0, 14)))
             }
             self.write_register(Register::RegPaConfig.addr(), (0x70 | level) as u8)
         } else {
             // PA BOOST
             if level > 17 {
                 if level > 20 {
-                    level = 20;
+                    return Err(RadioError(RadioError::ValueOutOfRange(0, 20)))
                 }
                 // subtract 3 from level, so 18 - 20 maps to 15 - 17
                 level -= 3;
@@ -546,13 +544,11 @@ where
     /// If a spreading factor of 6 is set, implicit header mode must be used to transmit
     /// and receive packets. Default value is `7`.
     pub fn set_spreading_factor(
-        &mut self,
-        mut sf: u8,
+        &mut self, 
+        sf: u8,
     ) -> Result<(), Error<E, CS::Error, RESET::Error>> {
-        if sf < 6 {
-            sf = 6;
-        } else if sf > 12 {
-            sf = 12;
+        if sf < 6 || sf > 12 {
+            return Err(RadioError(RadioError::ValueOutOfRange(6, 12)))
         }
 
         if sf == 6 {
@@ -619,13 +615,12 @@ where
     /// Default value is `5`.
     pub fn set_coding_rate_4(
         &mut self,
-        mut denominator: u8,
+        denominator: u8,
     ) -> Result<(), Error<E, CS::Error, RESET::Error>> {
-        if denominator < 5 {
-            denominator = 5;
-        } else if denominator > 8 {
-            denominator = 8;
+        if denominator < 5 || denominator > 8 {
+            return Err(RadioError(RadioError::ValueOutOfRange(5, 8)))
         }
+
         let cr = denominator - 4;
         let modem_config_1 = self.read_register(Register::RegModemConfig1.addr())?;
         self.write_register(
