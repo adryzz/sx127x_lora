@@ -1,5 +1,6 @@
 #![allow(unused_assignments)]
 #![no_std]
+#![feature(error_in_core)]
 #![crate_type = "lib"]
 #![crate_name = "sx127x_lora"]
 
@@ -150,6 +151,7 @@ use embedded_hal::blocking::delay::DelayMs;
 use embedded_hal::blocking::spi::{Transfer, Write};
 use embedded_hal::digital::v2::OutputPin;
 use embedded_hal::spi::{Mode, Phase, Polarity};
+use thiserror::Error;
 
 mod register;
 use self::register::PaConfig;
@@ -174,12 +176,24 @@ pub struct LoRa<SPI, CS, RESET> {
 
 #[derive(Debug)]
 pub enum Error<SPI, CS, RESET> {
-    Uninformative,
-    VersionMismatch(u8),
     CS(CS),
     Reset(RESET),
     SPI(SPI),
+    RadioError(RadioError)
+}
+
+#[derive(Error, Debug)]
+pub enum RadioError {
+    #[error("The packet is too big. The max size is {}.", 255)]
+    PacketTooBig,
+    #[error("Value out of range. The allowed range is [{0}-{1}].")]
+    ValueOutOfRange(u8, u8),
+    #[error("Version mismatch.")]
+    VersionMismatch(u8),
+    #[error("Can't write while transmitting.")]
     Transmitting,
+    #[error("Unknown error.")]
+    Unknown,
 }
 
 use crate::register::{FskDataModulationShaping, FskRampUpRamDown};
@@ -231,8 +245,20 @@ where
             sx127x.cs.set_high().map_err(CS)?;
             Ok(sx127x)
         } else {
-            Err(Error::VersionMismatch(version))
+            Err(Error::RadioError(RadioError::VersionMismatch(version)))
         }
+    }
+
+    /// Resets the LoRa radio
+    pub fn reset(
+        &mut self,
+        delay: &mut dyn DelayMs<u8>,
+    ) -> Result<(), Error<E, CS::Error, RESET::Error>> {
+        self.reset.set_low().map_err(Reset)?;
+        delay.delay_ms(10);
+        self.reset.set_high().map_err(Reset)?;
+        delay.delay_ms(10);
+        Ok(())
     }
 
     /// Lets owner of the driver struct to reconfigure the radio.  Takes care of resetting the
@@ -261,7 +287,7 @@ where
         payload_size: usize,
     ) -> Result<usize, Error<E, CS::Error, RESET::Error>> {
         if self.transmitting()? {
-            Err(Transmitting)
+            Err(Error::RadioError(RadioError::Transmitting))
         } else {
             self.set_mode(RadioMode::Stdby)?;
             if self.explicit_header {
@@ -292,7 +318,7 @@ where
         payload: &[u8],
     ) -> Result<(), Error<E, CS::Error, RESET::Error>> {
         if self.transmitting()? {
-            Err(Transmitting)
+            Err(Error::RadioError(RadioError::Transmitting))
         } else {
             self.set_mode(RadioMode::Stdby)?;
             if self.explicit_header {
@@ -340,7 +366,7 @@ where
                     self.clear_irq()?;
                     Ok(self.read_register(Register::RegRxNbBytes.addr())? as usize)
                 } else {
-                    Err(Uninformative)
+                    Err(RadioError(RadioError::Unknown))
                 }
             }
             None => {
